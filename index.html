@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minesweeper</title>
+<style>
+  :root { --cell: 26px; }
+  body {
+    font-family: Verdana, Geneva, sans-serif;
+    background: #c0c0c0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    margin: 0;
+    padding: 24px;
+    min-height: 100vh;
+    box-sizing: border-box;
+  }
+  h1 { font-size: 20px; margin: 0; letter-spacing: 1px; }
+  .levels { display: flex; gap: 8px; }
+  .levels button {
+    font: inherit; font-size: 13px; padding: 4px 10px; cursor: pointer;
+    border: 2px outset #fff; background: #c0c0c0;
+  }
+  .levels button.active { border-style: inset; font-weight: bold; }
+
+  .frame { border: 6px ridge #fff; background: #c0c0c0; padding: 8px; }
+
+  .hud {
+    display: flex; justify-content: space-between; align-items: center;
+    border: 3px inset #fff; padding: 6px; margin-bottom: 8px;
+  }
+  .counter {
+    font-family: "Courier New", monospace; font-weight: bold; font-size: 24px;
+    background: #000; color: #f00; padding: 2px 6px; min-width: 54px;
+    text-align: right; letter-spacing: 2px;
+  }
+  .face {
+    font-size: 22px; line-height: 1; width: 40px; height: 40px;
+    border: 3px outset #fff; background: #c0c0c0; cursor: pointer; padding: 0;
+  }
+  .face:active { border-style: inset; }
+
+  .board { border: 3px inset #fff; display: grid; gap: 0; touch-action: manipulation; }
+  .cell {
+    width: var(--cell); height: var(--cell);
+    box-sizing: border-box;
+    font-weight: bold; font-size: 15px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    border: 3px outset #fff; background: #c0c0c0; cursor: pointer;
+    user-select: none; padding: 0;
+  }
+  .cell.revealed { border: 1px solid #808080; cursor: default; }
+  .cell.mine { background: #f00; }
+  .cell.flag { }
+  /* classic number colors */
+  .n1 { color: #0000ff; } .n2 { color: #008000; } .n3 { color: #ff0000; }
+  .n4 { color: #000080; } .n5 { color: #800000; } .n6 { color: #008080; }
+  .n7 { color: #000000; } .n8 { color: #808080; }
+</style>
+</head>
+<body>
+  <h1>MINESWEEPER</h1>
+  <div class="levels" id="levels"></div>
+
+  <div class="frame">
+    <div class="hud">
+      <div class="counter" id="mines">000</div>
+      <button class="face" id="face" title="New game">🙂</button>
+      <div class="counter" id="timer">000</div>
+    </div>
+    <div class="board" id="board" oncontextmenu="return false"></div>
+  </div>
+
+<script>
+// classic spiked-disc mine, scalable SVG (replaces cartoon bomb)
+const MINE_SVG = '<svg viewBox="0 0 20 20" width="70%" height="70%" aria-label="mine">' +
+  '<g stroke="#000" stroke-width="1.8"><line x1="10" y1="1" x2="10" y2="19"/>' +
+  '<line x1="1" y1="10" x2="19" y2="10"/><line x1="3.5" y1="3.5" x2="16.5" y2="16.5"/>' +
+  '<line x1="16.5" y1="3.5" x2="3.5" y2="16.5"/></g>' +
+  '<circle cx="10" cy="10" r="5.5" fill="#000"/>' +
+  '<circle cx="8" cy="8" r="1.4" fill="#fff"/></svg>';
+
+// classic red flag on a black pole
+const FLAG_SVG = '<svg viewBox="0 0 20 20" width="70%" height="70%" aria-label="flag">' +
+  '<polygon points="10,3 10,10 4,6.5" fill="#f00"/>' +
+  '<line x1="10" y1="3" x2="10" y2="15" stroke="#000" stroke-width="1.2"/>' +
+  '<rect x="6" y="14.5" width="8" height="1.6" fill="#000"/>' +
+  '<rect x="4.5" y="16" width="11" height="2" fill="#000"/></svg>';
+
+const LEVELS = {
+  Beginner:     { rows: 9,  cols: 9,  mines: 10 },
+  Intermediate: { rows: 16, cols: 16, mines: 40 },
+  Expert:       { rows: 16, cols: 30, mines: 99 },
+};
+
+const boardEl = document.getElementById('board');
+const faceEl  = document.getElementById('face');
+const minesEl = document.getElementById('mines');
+const timerEl = document.getElementById('timer');
+const levelsEl = document.getElementById('levels');
+
+let cfg, grid, cells, started, over, won, flags, revealedCount, timer, elapsed;
+
+function pad(n) { return String(Math.max(0, Math.min(999, n))).padStart(3, '0'); }
+
+function neighbors(r, c) {
+  const out = [];
+  for (let dr = -1; dr <= 1; dr++)
+    for (let dc = -1; dc <= 1; dc++) {
+      if (!dr && !dc) continue;
+      const nr = r + dr, nc = c + dc;
+      if (nr >= 0 && nr < cfg.rows && nc >= 0 && nc < cfg.cols) out.push([nr, nc]);
+    }
+  return out;
+}
+
+function newGame(config) {
+  cfg = config;
+  over = won = started = false;
+  flags = 0; revealedCount = 0; elapsed = 0;
+  clearInterval(timer);
+  faceEl.textContent = '🙂';
+  minesEl.textContent = pad(cfg.mines);
+  timerEl.textContent = '000';
+
+  grid = Array.from({ length: cfg.rows }, () =>
+    Array.from({ length: cfg.cols }, () => ({ mine: false, adj: 0, revealed: false, flagged: false })));
+
+  boardEl.style.gridTemplateColumns = `repeat(${cfg.cols}, var(--cell))`;
+  boardEl.innerHTML = '';
+  cells = [];
+  for (let r = 0; r < cfg.rows; r++) {
+    cells[r] = [];
+    for (let c = 0; c < cfg.cols; c++) {
+      const el = document.createElement('button');
+      el.className = 'cell';
+      el.addEventListener('click', () => reveal(r, c));
+      el.addEventListener('contextmenu', (e) => { e.preventDefault(); toggleFlag(r, c); });
+      boardEl.appendChild(el);
+      cells[r][c] = el;
+    }
+  }
+}
+
+// place mines after first click so the first reveal is always safe
+function placeMines(safeR, safeC) {
+  const safe = new Set([safeR + ',' + safeC]);
+  neighbors(safeR, safeC).forEach(([r, c]) => safe.add(r + ',' + c));
+  let placed = 0;
+  while (placed < cfg.mines) {
+    const r = Math.floor(Math.random() * cfg.rows);
+    const c = Math.floor(Math.random() * cfg.cols);
+    if (grid[r][c].mine || safe.has(r + ',' + c)) continue;
+    grid[r][c].mine = true;
+    placed++;
+  }
+  for (let r = 0; r < cfg.rows; r++)
+    for (let c = 0; c < cfg.cols; c++)
+      grid[r][c].adj = neighbors(r, c).filter(([nr, nc]) => grid[nr][nc].mine).length;
+}
+
+function startTimer() {
+  started = true;
+  timer = setInterval(() => {
+    elapsed++;
+    timerEl.textContent = pad(elapsed);
+  }, 1000);
+}
+
+function reveal(r, c) {
+  if (over) return;
+  const cell = grid[r][c];
+  if (cell.revealed || cell.flagged) return;
+  if (!started) { placeMines(r, c); startTimer(); }
+
+  if (cell.mine) return loseGame(r, c);
+
+  // iterative flood fill for zero-adjacency regions
+  const stack = [[r, c]];
+  while (stack.length) {
+    const [cr, cc] = stack.pop();
+    const cur = grid[cr][cc];
+    if (cur.revealed || cur.flagged) continue;
+    cur.revealed = true;
+    revealedCount++;
+    const el = cells[cr][cc];
+    el.classList.add('revealed');
+    if (cur.adj > 0) {
+      el.textContent = cur.adj;
+      el.classList.add('n' + cur.adj);
+    } else {
+      neighbors(cr, cc).forEach(([nr, nc]) => stack.push([nr, nc]));
+    }
+  }
+  checkWin();
+}
+
+function toggleFlag(r, c) {
+  if (over) return;
+  const cell = grid[r][c];
+  if (cell.revealed) return;
+  cell.flagged = !cell.flagged;
+  flags += cell.flagged ? 1 : -1;
+  cells[r][c].innerHTML = cell.flagged ? FLAG_SVG : '';
+  minesEl.textContent = pad(cfg.mines - flags);
+}
+
+function loseGame(r, c) {
+  over = true;
+  clearInterval(timer);
+  faceEl.textContent = '😵';
+  for (let rr = 0; rr < cfg.rows; rr++)
+    for (let cc = 0; cc < cfg.cols; cc++) {
+      const cell = grid[rr][cc];
+      if (cell.mine && !cell.flagged) { cells[rr][cc].classList.add('revealed'); cells[rr][cc].innerHTML = MINE_SVG; }
+      if (!cell.mine && cell.flagged) cells[rr][cc].textContent = '❌';
+    }
+  cells[r][c].classList.add('mine');
+}
+
+function checkWin() {
+  if (revealedCount === cfg.rows * cfg.cols - cfg.mines) {
+    over = won = true;
+    clearInterval(timer);
+    faceEl.textContent = '😎';
+    // flag any remaining mines for a tidy finish
+    for (let r = 0; r < cfg.rows; r++)
+      for (let c = 0; c < cfg.cols; c++)
+        if (grid[r][c].mine && !grid[r][c].flagged) {
+          grid[r][c].flagged = true;
+          cells[r][c].innerHTML = FLAG_SVG;
+        }
+    minesEl.textContent = '000';
+  }
+}
+
+// level buttons
+Object.keys(LEVELS).forEach((name, i) => {
+  const btn = document.createElement('button');
+  btn.textContent = name;
+  if (i === 0) btn.classList.add('active');
+  btn.addEventListener('click', () => {
+    [...levelsEl.children].forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    newGame(LEVELS[name]);
+  });
+  levelsEl.appendChild(btn);
+});
+
+faceEl.addEventListener('click', () => newGame(cfg));
+newGame(LEVELS.Beginner);
+</script>
+</body>
+</html>
