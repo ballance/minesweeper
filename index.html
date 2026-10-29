@@ -28,6 +28,9 @@
 
   .frame { border: 6px ridge #fff; background: #c0c0c0; padding: 8px; }
 
+  .source { font-size: 12px; color: #333; text-decoration: none; }
+  .source:hover { text-decoration: underline; }
+
   .hud {
     display: flex; justify-content: space-between; align-items: center;
     border: 3px inset #fff; padding: 6px; margin-bottom: 8px;
@@ -73,6 +76,8 @@
     </div>
     <div class="board" id="board" oncontextmenu="return false"></div>
   </div>
+
+  <a class="source" href="https://github.com/ballance/minesweeper">source on GitHub</a>
 
 <script>
 // classic spiked-disc mine, scalable SVG (replaces cartoon bomb)
